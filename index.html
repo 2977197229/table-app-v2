@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新媒体项目进度录入系统</title>
+<link rel="stylesheet" href="css/style.css?v=20260806bd">
+<script src="feishu-config.js"></script>
+<script src="https://lf1-cdn-tos.bytegoofy.com/goofy/lark/op/h5-js-sdk-1.5.26.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+<!-- 飞书免登录界面 -->
+<section class="login-screen" id="login-screen">
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="login-logo">📊</div>
+      <h1>新媒体项目进度录入</h1>
+      <p>通过飞书身份自动登录</p>
+    </div>
+    <div class="feishu-login-status" id="feishu-login-status">
+      <div class="feishu-spinner"></div>
+      <p class="feishu-status-text" id="feishu-status-text">正在获取飞书身份...</p>
+    </div>
+    <div class="login-error" id="login-error"></div>
+    <button class="btn btn-primary btn-feishu-retry" id="btn-feishu-retry" style="display:none;" onclick="location.reload()">重新登录</button>
+  </div>
+</section>
+
+<!-- 顶部工具栏 -->
+<header class="toolbar app-shell" hidden>
+  <div class="toolbar-left">
+    <h1 class="logo">📊 新媒体项目进度录入</h1>
+  </div>
+  <div class="toolbar-center">
+    <div class="history-date-box">
+      <span class="today-badge" id="today-badge">📅 今天</span>
+      <span class="shift-badge" id="shift-badge">🌅 早班</span>
+      <span class="duty-person" id="primary-duty" onclick="openScheduleModal()" title="点击设置排班">👤 未设置</span>
+      <input type="date" id="history-date" class="history-date-input" title="选择历史日期">
+      <button class="btn btn-secondary btn-sm" id="btn-history-view">查看历史</button>
+      <button class="btn btn-secondary btn-sm" id="btn-history-today">今天</button>
+    </div>
+  </div>
+  <div class="toolbar-right">
+    <button class="btn btn-warning" id="btn-order-stats">
+      📊 单量统计
+    </button>
+    <button class="btn btn-primary" id="btn-save-local">
+      💾 保存到本地
+    </button>
+    <button class="btn btn-success" id="btn-write-feishu">
+      ✈️ 生成飞书录入指令
+    </button>
+    <button class="btn btn-secondary" id="btn-toggle-preview">
+      👁️ 预览数据
+    </button>
+    <span class="current-user" id="current-user"></span>
+    <button class="btn btn-secondary" id="btn-logout">
+      退出登录
+    </button>
+  </div>
+</header>
+
+<!-- 主区域 -->
+<main class="main-layout app-shell" hidden>
+  <section class="preview-panel" id="preview-panel">
+    <!-- 账号快捷筛选栏（仅在配置了映射的子表显示） -->
+    <div class="account-filter-bar" id="account-filter-bar" hidden>
+      <span class="account-filter-label">🔍 账号筛选</span>
+      <div class="account-filter-tags" id="account-filter-tags"></div>
+    </div>
+
+    <!-- 排单统计面板 -->
+    <div class="order-stats-panel" id="order-stats-panel">
+      <div class="order-stats-header">
+        <span class="order-stats-title">📊 当天排单情况</span>
+        <span class="order-stats-week" id="order-stats-week"></span>
+      </div>
+      <div class="order-stats-content" id="order-stats-content">
+        <div class="order-stats-empty">暂无本周排单数据</div>
+      </div>
+    </div>
+
+    <div class="panel-header">
+      <div class="panel-header-left">
+        <h2>📋 子表工作台</h2>
+        <div class="group-by-box">
+          <span class="group-by-label">筛选层级</span>
+          <select id="group-by-select" class="group-by-select">
+            <option value="name">项目名</option>
+            <option value="date">接单日期</option>
+            <option value="publishDate">发布日期</option>
+            <option value="assignee">接单人</option>
+            <option value="status" selected>项目进度</option>
+          </select>
+          <span class="group-filter-divider"></span>
+          <span class="group-by-label">具体筛选</span>
+          <select id="group-value-select" class="group-by-select group-value-select">
+            <option value="__all__">全部</option>
+          </select>
+        </div>
+        <div class="search-box">
+          <input type="search" id="project-search" class="search-input" placeholder="搜索项目、账号、商务、平台...">
+          <button class="search-clear" id="btn-clear-search" title="清空搜索">×</button>
+        </div>
+        <span class="count-badge" id="project-count">0 个项目</span>
+        <button class="btn btn-warning btn-sm" id="btn-filter-handover" title="筛选当前班次交接的项目">🔀 交接筛选</button>
+      </div>
+      <div class="panel-header-right">
+        <button class="btn btn-secondary btn-sm" id="btn-toggle-source" title="显示/隐藏来源列" style="display:none;">👁️ 显示来源</button>
+        <button class="btn btn-secondary btn-sm" id="btn-account-config" title="编辑账号简称映射">⚙️ 账号映射</button>
+        <button class="btn btn-primary" id="btn-add-row">➕ 添加空行</button>
+        <button class="btn btn-primary" id="btn-smart-input">🤖 智能录入</button>
+      </div>
+    </div>
+
+    <!-- 平台标签栏（从底部上移至此） -->
+    <div class="sheet-tabs-bar app-shell" hidden>
+      <div class="tabs-scroll" id="sheet-tabs">
+        <div class="sheet-tab active" data-sheet="在坐标这边生活">在坐标这边生活</div>
+        <div class="sheet-tab" data-sheet="字节单">字节单</div>
+        <div class="sheet-tab" data-sheet="暂停+回声+频率">暂停+回声+频率</div>
+        <div class="sheet-tab" data-sheet="小红书">小红书</div>
+        <div class="sheet-tab" data-sheet="快手+视频号">快手+视频号</div>
+        <div class="sheet-tab" data-sheet="🌟娱乐社+八妹+番茄+小歪+果子">🌟娱乐社+八妹+番茄+小歪+果子</div>
+        <div class="sheet-tab" data-sheet="🌟小圆子+野生+贝壳+小涡+小赵">🌟小圆子+野生+贝壳+小涡+小赵</div>
+        <div class="sheet-tab auto-sheet-tab" data-sheet="📦 停滞项目">📦 停滞项目</div>
+        <div class="sheet-tab auto-sheet-tab" data-sheet="✅ 已发布合集">✅ 已发布合集</div>
+      </div>
+    </div>
+
+    <!-- 工作台主体：左侧项目表 + 右侧任务清单 -->
+    <div class="workbench-layout">
+      <div class="project-workbench-panel">
+        <div class="table-wrapper" id="table-wrapper">
+          <table class="data-table" id="data-table">
+            <thead>
+              <tr>
+                <th style="width:72px" class="th-status">进度</th>
+                <th style="width:70px">平台</th>
+                <th style="width:130px">项目名字</th>
+                <th style="width:85px">接单日期</th>
+                <th style="width:80px">发布日期</th>
+                <th style="width:70px">下单人</th>
+                <th style="width:160px">标题</th>
+                <th style="width:85px">订单类型</th>
+                <th style="width:85px">品牌任务ID</th>
+                <th style="width:100px">账号名</th>
+                <th style="width:180px">发布链接</th>
+                <th style="width:65px">接单人</th>
+                <th style="width:65px">剪辑</th>
+                <th style="width:55px">备注</th>
+                <th style="width:75px">交接</th>
+                <th style="width:65px">详情</th>
+                <th style="width:40px">操作</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+            </tbody>
+          </table>
+        </div>
+
+        <div class="preview-content" id="preview-content" style="display:none;">
+          <div class="empty-state">
+            <div class="empty-icon">📝</div>
+            <p>当前子表「<span id="empty-sheet-name"></span>」暂无项目</p>
+            <p class="empty-sub">点击「添加空行」或「智能录入」开始录入</p>
+            <div class="empty-actions">
+              <button class="btn btn-primary" onclick="document.getElementById('btn-smart-input').click()">🤖 智能录入</button>
+              <button class="btn btn-secondary" onclick="document.getElementById('btn-add-row').click()">➕ 添加空行</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧任务清单面板 -->
+      <div class="task-panel" id="task-panel">
+        <div class="task-panel-header">
+          <h3>📝 任务清单</h3>
+          <div class="task-stats">
+            <span class="task-stat" id="task-stat-todo">0 待办</span>
+            <span class="task-stat" id="task-stat-done">0 已完成</span>
+          </div>
+        </div>
+        <div class="task-input-section">
+          <textarea id="task-input" class="task-input" placeholder="粘贴群聊指令内容...&#10;例如：&#10;【项目名】桃花姬&#10;【指令】出脚本&#10;【投放账号】账号1 账号2"></textarea>
+          <div class="task-input-actions">
+            <button class="btn btn-primary btn-sm" id="btn-task-parse">提炼任务</button>
+            <button class="btn btn-secondary btn-sm" id="btn-task-clear">清空</button>
+            <button class="btn btn-secondary btn-sm" id="btn-task-clear-done">清除已完成</button>
+            <button class="btn btn-secondary btn-sm" id="btn-task-clear-all">清除全部</button>
+          </div>
+        </div>
+        <div class="task-list-wrapper">
+          <div class="task-list" id="task-list"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 飞书录入指令弹窗 -->
+<div class="modal" id="modal-feishu">
+  <div class="modal-overlay"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>✈️ 飞书录入指令</h3>
+      <button class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-desc">请将以下内容复制发送给 TRAE，我将为您执行飞书表格写入操作：</p>
+      <textarea class="modal-textarea" id="feishu-command" readonly></textarea>
+      <button class="btn btn-primary btn-copy" id="btn-copy-command">
+        📋 复制指令
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- 历史记录弹窗 -->
+<div class="modal modal-lg" id="modal-history">
+  <div class="modal-overlay"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="history-title">📅 历史记录</h3>
+      <button class="modal-close" id="history-modal-close">&times;</button>
+    </div>
+    <div class="modal-body history-body">
+      <div class="history-summary" id="history-summary"></div>
+      <div class="history-content" id="history-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 智能录入弹窗 -->
+<div class="modal modal-lg" id="modal-smart">
+  <div class="modal-overlay"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>🤖 智能录入</h3>
+      <button class="modal-close" id="smart-modal-close">&times;</button>
+    </div>
+    <div class="modal-body smart-body">
+      <div class="smart-layout">
+        <!-- 左侧：原始输入 -->
+        <div class="smart-input-panel">
+          <div class="smart-section-header">
+            <span>📄 粘贴原始项目信息</span>
+            <span class="smart-hint">支持【字段名】值、#标题分组、顿号分隔账号</span>
+          </div>
+          <textarea class="smart-textarea" id="smart-input" placeholder="在此粘贴项目信息...&#10;&#10;示例格式：&#10;【项目/品牌名】xxx&#10;【销售】张三&#10;【投放平台】抖音&#10;【投放账号】&#10;#剧名1&#10;账号A、账号B&#10;#剧名2&#10;账号C、账号D"></textarea>
+          <div class="smart-input-actions">
+            <button class="btn btn-secondary" id="btn-smart-clear">🔄 清空</button>
+            <button class="btn btn-secondary" id="btn-smart-sample">📋 填充示例</button>
+            <button class="btn btn-primary" id="btn-smart-parse">🔍 解析</button>
+          </div>
+        </div>
+
+        <!-- 右侧：解析结果 -->
+        <div class="smart-result-panel">
+          <div class="smart-section-header">
+            <span>✨ 解析结果</span>
+            <span class="smart-count" id="smart-count">0 条</span>
+          </div>
+          <div class="smart-result-content" id="smart-result">
+            <div class="smart-empty">
+              <div class="smart-empty-icon">🤖</div>
+              <p>粘贴文本后点击「解析」</p>
+              <p class="smart-empty-sub">解析器会自动识别字段、展开账号分组</p>
+            </div>
+          </div>
+          <div class="smart-result-actions">
+            <button class="btn btn-success btn-block" id="btn-smart-add" disabled>➕ 添加到表格</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 项目详情弹窗 -->
+<div class="modal modal-xl" id="modal-project-detail">
+  <div class="modal-overlay"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="project-detail-title">📁 项目详情</h3>
+      <button class="modal-close" id="project-detail-close">&times;</button>
+    </div>
+    <div class="modal-body project-detail-body">
+      <div class="detail-summary" id="project-detail-summary"></div>
+      <div class="detail-layout">
+        <section class="detail-card">
+          <div class="detail-card-header">
+            <span>完整下单信息</span>
+            <span class="detail-hint">粘贴客户原始需求、素材链接、话题词、注意事项等</span>
+          </div>
+          <textarea id="detail-order-info" class="detail-textarea" placeholder="在这里保存该项目完整下单信息..."></textarea>
+        </section>
+        <section class="detail-card">
+          <div class="detail-card-header">
+            <span>项目资料链接</span>
+            <span class="detail-hint">可填写飞书文档、网盘、参考资料等链接</span>
+          </div>
+          <textarea id="detail-reference-link" class="detail-textarea detail-textarea-sm" placeholder="会自动识别完整下单信息中的链接和命名，也可手动补充..."></textarea>
+          <textarea id="detail-reference-note" class="detail-textarea detail-textarea-sm" placeholder="资料说明或补充备注..."></textarea>
+        </section>
+      </div>
+      <section class="detail-card">
+        <div class="detail-card-header">
+          <span>各账号项目进度</span>
+          <span class="detail-hint">按当前项目下的账号自动生成，可单独维护状态、备注和文件</span>
+        </div>
+        <div id="detail-account-list" class="detail-account-list"></div>
+      </section>
+      <div class="detail-actions">
+        <button class="btn btn-secondary" id="btn-project-detail-refresh">同步当前项目账号</button>
+        <button class="btn btn-secondary" id="btn-project-detail-copy-link">复制详情链接</button>
+        <button class="btn btn-primary" id="btn-project-detail-save">保存详情</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 账号映射配置弹窗 -->
+<div class="modal modal-lg" id="modal-account-config">
+  <div class="modal-overlay" onclick="closeAccountConfigModal()"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>⚙️ 账号简称映射配置</h3>
+      <button class="modal-close" onclick="closeAccountConfigModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="account-config-tabs" id="account-config-tabs">
+        <button class="account-config-tab active" data-config-sheet="🌟娱乐社+八妹+番茄+小歪+果子">子表1：娱乐社组</button>
+        <button class="account-config-tab" data-config-sheet="🌟小圆子+野生+贝壳+小涡+小赵">子表2：小圆子组</button>
+      </div>
+      <div class="account-config-hint">
+        <p>📌 每个子表使用独立的映射规则，互不干扰。</p>
+        <p>格式：左侧填简称，右侧填完整账号名。保存后立即生效。</p>
+        <p>⚠️ 排他规则：子表2的「小赵」在文本包含「小灶」时不命中（固定规则，无需配置）。</p>
+      </div>
+      <div class="account-config-editor" id="account-config-editor"></div>
+      <div class="account-config-actions">
+        <button class="btn btn-secondary" id="btn-account-config-add-row">➕ 新增映射</button>
+        <button class="btn btn-primary" id="btn-account-config-save">💾 保存配置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast 提示 -->
+<div class="toast" id="toast"></div>
+
+<!-- 批量编辑浮动栏 -->
+<div class="batch-edit-bar" id="batch-edit-bar" hidden>
+  <span class="batch-edit-info" id="batch-edit-info">已选中 0 个单元格</span>
+  <input type="text" class="batch-edit-input" id="batch-edit-input" placeholder="输入值后按 Enter 批量填充...">
+  <button class="btn btn-primary btn-sm" id="btn-batch-fill">填充</button>
+  <button class="btn btn-secondary btn-sm" id="btn-batch-clear">清空选区</button>
+  <button class="btn btn-secondary btn-sm" id="btn-batch-cancel">取消选择</button>
+</div>
+
+<!-- 排班设置弹窗 -->
+<div class="modal" id="modal-schedule">
+  <div class="modal-overlay" onclick="closeScheduleModal()"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>📅 <span id="schedule-modal-title">排班设置</span></h3>
+      <button class="modal-close" onclick="closeScheduleModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <!-- 智能录入排班区 -->
+      <div class="schedule-smart-section">
+        <div class="schedule-smart-header" onclick="toggleScheduleSmartInput()">
+          <span class="schedule-smart-title">🤖 智能录入排班</span>
+          <span class="schedule-smart-hint">上传排班表图片或粘贴文本，自动解析填充 ▼</span>
+        </div>
+        <div id="schedule-smart-input-area" class="schedule-smart-body" style="display:none;">
+          <div class="schedule-smart-tabs">
+            <button class="schedule-smart-tab active" data-smart-tab="text" onclick="switchScheduleSmartTab('text')">📝 文本粘贴</button>
+            <button class="schedule-smart-tab" data-smart-tab="image" onclick="switchScheduleSmartTab('image')">📷 图片上传</button>
+          </div>
+          <div id="schedule-smart-text-panel">
+            <textarea id="schedule-smart-text" class="schedule-smart-textarea" placeholder="粘贴排班表文本内容...&#10;&#10;示例格式：&#10;早班：&#10;快手+视频号：陈家怡&#10;A组：宋语诗&#10;B组：李怡婷&#10;字节+坐标：李红&#10;小红书：冯静&#10;辅助：陈柳静、赵海琼&#10;&#10;晚班：&#10;快手+视频号：刘慧&#10;A组：吴昱颖&#10;...&#10;&#10;排休：刘慧、冯静、宋语诗"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="parseScheduleText()" style="margin-top:0.5rem;">🔍 解析并填充</button>
+          </div>
+          <div id="schedule-smart-image-panel" style="display:none;">
+            <div class="schedule-image-upload-zone" id="schedule-image-drop-zone" onclick="document.getElementById('schedule-image-input').click()">
+              <input type="file" id="schedule-image-input" accept="image/*" style="display:none;" onchange="handleScheduleImageUpload(event)">
+              <div class="schedule-upload-placeholder">
+                <div class="schedule-upload-icon">📷</div>
+                <p>点击上传排班表图片</p>
+                <p class="schedule-upload-sub">上传后自动识别排班并填充，无需手动录入</p>
+              </div>
+            </div>
+            <div id="schedule-image-preview-area" style="display:none;">
+              <div class="schedule-image-preview-wrapper">
+                <img id="schedule-image-preview" class="schedule-image-preview" alt="排班表预览">
+                <div class="schedule-image-actions">
+                  <button class="btn btn-secondary btn-sm" onclick="clearScheduleImage()">🗑️ 清除图片</button>
+                  <button class="btn btn-secondary btn-sm" onclick="document.getElementById('schedule-image-input').click()">🔄 重新上传</button>
+                </div>
+              </div>
+              <!-- OCR 识别进度 -->
+              <div id="schedule-ocr-progress" class="schedule-ocr-progress" style="display:none;">
+                <div class="ocr-progress-header">
+                  <span class="ocr-spinner"></span>
+                  <span id="schedule-ocr-status">正在识别图片内容...</span>
+                </div>
+                <div class="ocr-progress-bar-wrapper">
+                  <div class="ocr-progress-bar" id="schedule-ocr-bar" style="width:0%"></div>
+                </div>
+                <span class="ocr-progress-percent" id="schedule-ocr-percent">0%</span>
+              </div>
+              <!-- OCR 识别结果（可编辑） -->
+              <div id="schedule-ocr-result-area" class="schedule-ocr-result-area" style="display:none;">
+                <div class="ocr-result-header">
+                  <span>📝 识别结果（可编辑修正）</span>
+                  <span class="ocr-result-hint">如有识别错误可直接修改</span>
+                </div>
+                <textarea id="schedule-ocr-text" class="schedule-ocr-textarea" placeholder="识别结果将显示在这里..."></textarea>
+                <button class="btn btn-primary btn-sm" onclick="applyOcrResult()" style="margin-top:0.5rem;">🔍 解析并填充排班</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 班次切换标签 -->
+      <div class="schedule-shift-tabs">
+        <button class="schedule-shift-tab active" data-schedule-shift="morning" onclick="switchScheduleShift('morning')">
+          <span class="shift-tab-icon">🌅</span> 早班 <span class="shift-tab-time">8:30-16:30</span>
+        </button>
+        <button class="schedule-shift-tab" data-schedule-shift="evening" onclick="switchScheduleShift('evening')">
+          <span class="shift-tab-icon">🌙</span> 晚班 <span class="shift-tab-time">16:30-00:30</span>
+        </button>
+      </div>
+      <div class="schedule-date-info" id="schedule-date-info"></div>
+
+      <!-- 早班内容 -->
+      <div id="schedule-panel-morning" class="schedule-shift-panel active">
+        <div class="schedule-two-col">
+          <div class="schedule-col">
+            <div class="form-group">
+              <label>各子表主值班人</label>
+              <div id="schedule-sheet-duty-list-morning" class="sheet-duty-list"></div>
+            </div>
+          </div>
+          <div class="schedule-col">
+            <div class="form-group">
+              <label>辅助值班人</label>
+              <div id="schedule-secondary-list-morning">
+                <div class="secondary-duty-row">
+                  <input type="text" class="form-control secondary-duty-input-morning" placeholder="输入辅助值班人姓名">
+                  <button class="btn-remove-secondary" onclick="this.parentElement.remove()" type="button">&times;</button>
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="addSecondaryDutyField('morning')" type="button" style="margin-top:0.5rem;">+ 添加辅助值班人</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 晚班内容 -->
+      <div id="schedule-panel-evening" class="schedule-shift-panel" style="display:none;">
+        <div class="schedule-two-col">
+          <div class="schedule-col">
+            <div class="form-group">
+              <label>各子表主值班人</label>
+              <div id="schedule-sheet-duty-list-evening" class="sheet-duty-list"></div>
+            </div>
+          </div>
+          <div class="schedule-col">
+            <div class="form-group">
+              <label>辅助值班人</label>
+              <div id="schedule-secondary-list-evening">
+                <div class="secondary-duty-row">
+                  <input type="text" class="form-control secondary-duty-input-evening" placeholder="输入辅助值班人姓名">
+                  <button class="btn-remove-secondary" onclick="this.parentElement.remove()" type="button">&times;</button>
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="addSecondaryDutyField('evening')" type="button" style="margin-top:0.5rem;">+ 添加辅助值班人</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 排休人员（公共） -->
+      <div class="schedule-rest-section">
+        <div class="form-group">
+          <label>排休人员</label>
+          <div id="schedule-rest-list">
+            <div class="secondary-duty-row">
+              <input type="text" class="form-control rest-duty-input" placeholder="输入排休人员姓名">
+              <button class="btn-remove-secondary" onclick="this.parentElement.remove()" type="button">&times;</button>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="addRestDutyField()" type="button" style="margin-top:0.5rem;">+ 添加排休人员</button>
+        </div>
+      </div>
+
+      <!-- 可排班人员名单（用于OCR识别纠错参考） -->
+      <div class="schedule-staff-list-section">
+        <div class="schedule-staff-header" onclick="toggleStaffList()">
+          <span class="schedule-staff-title">👥 可排班人员名单</span>
+          <span class="schedule-staff-hint">OCR识别时根据此名单自动纠错，点击展开/收起 ▼</span>
+        </div>
+        <div id="schedule-staff-list-area" class="schedule-staff-body" style="display:none;">
+          <div class="schedule-staff-tags" id="schedule-staff-tags"></div>
+          <div class="schedule-staff-add-row">
+            <input type="text" id="schedule-staff-new-name" class="form-control" placeholder="输入新员工姓名" style="flex:1;">
+            <button class="btn btn-primary btn-sm" onclick="addStaffName()" type="button">+ 添加</button>
+          </div>
+          <p class="schedule-staff-tip">💡 上传排班表图片时，系统会根据此名单自动纠正OCR识别中的错别字</p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:0.6rem;padding:1rem 1.2rem;border-top:1px solid var(--rule);">
+      <button class="btn btn-secondary" onclick="closeScheduleModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveScheduleSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 单量统计弹窗 -->
+<div class="modal modal-lg" id="modal-order-stats">
+  <div class="modal-overlay" onclick="closeOrderStatsModal()"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>📊 上周单量统计</h3>
+      <button class="modal-close" onclick="closeOrderStatsModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="order-stats-modal-body">
+    </div>
+  </div>
+</div>
+
+<script src="js/config.js?v=20260909split"></script>
+<script src="js/auth.js?v=20260909split"></script>
+<script src="js/events.js?v=20260909split"></script>
+<script src="js/table.js?v=20260909split"></script>
+<script src="js/data.js?v=20260909split"></script>
+<script src="js/detail.js?v=20260909split"></script>
+<script src="js/schedule.js?v=20260909split"></script>
+<script src="js/smart-entry.js?v=20260909split"></script>
+<script src="js/tasks.js?v=20260909split"></script>
+</body>
+</html>
