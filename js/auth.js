@@ -102,9 +102,133 @@ async function exchangeCodeForToken(code) {
   await startAppOnce();
 }
 
+// 判断是否在飞书客户端内（以 tt 对象为准，h5sdk JS 文件在普通浏览器也会加载）
+function isFeishuClient() {
+  // tt 是飞书客户端 webview 原生注入的，最可靠
+  if (typeof window.tt !== 'undefined' && typeof window.tt.requestAuthCode === 'function') {
+    return true;
+  }
+  // 备选：检查 userAgent
+  const ua = navigator.userAgent || '';
+  if (ua.includes('Lark') || ua.includes('Feishu') || ua.includes('lark-webview')) {
+    return true;
+  }
+  return false;
+}
+
+// 带超时的 Promise
+function withTimeout(promise, ms, timeoutMsg = '操作超时') {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutMsg));
+    }, ms);
+    promise.then(
+      val => { clearTimeout(timer); resolve(val); },
+      err => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
+// 跳转到飞书 OAuth 授权页（外部浏览器登录方式）
+function redirectToFeishuOAuth() {
+  if (!FEISHU_APP_ID) return;
+  setFeishuStatus('正在跳转至飞书授权...');
+  const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
+  const feishuAuthUrl = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=${FEISHU_APP_ID}&response_type=code&redirect_uri=${redirectUri}&state=feishu_login`;
+  window.location.href = feishuAuthUrl;
+}
+
+// 显示手动登录按钮（免登失败时的降级方案）
+function showManualLoginButton(message) {
+  setFeishuStatus('自动登录失败');
+  setLoginError(message);
+  // 显示重试按钮，点击后跳转到 OAuth 页面
+  if (els.btnFeishuRetry) {
+    els.btnFeishuRetry.textContent = '手动飞书登录';
+    els.btnFeishuRetry.style.display = 'block';
+    els.btnFeishuRetry.onclick = (e) => {
+      e.preventDefault();
+      redirectToFeishuOAuth();
+    };
+  }
+}
+
+// 飞书客户端内免登
+async function feishuSSOLogin() {
+  setFeishuStatus('飞书客户端授权中...');
+  
+  const code = await new Promise((resolve, reject) => {
+    const h5sdk = window.h5sdk;
+    const tt = window.tt;
+    let settled = false;
+
+    const doRequest = () => {
+      if (settled) return;
+      if (tt && typeof tt.requestAuthCode === 'function') {
+        tt.requestAuthCode({
+          appId: FEISHU_APP_ID,
+          success(res) {
+            if (settled) return;
+            settled = true;
+            const c = res.code || res.authCode || '';
+            console.log('[Feishu SDK] requestAuthCode 成功');
+            resolve(c);
+          },
+          fail(err) {
+            if (settled) return;
+            settled = true;
+            console.error('[Feishu SDK] requestAuthCode 失败:', err);
+            const msg = err.errMsg || err.errmsg || (typeof err === 'string' ? err : JSON.stringify(err)) || '获取授权码失败';
+            reject(new Error(msg));
+          }
+        });
+      } else {
+        if (settled) return;
+        settled = true;
+        reject(new Error('飞书 SDK 不支持免登，请更新飞书客户端'));
+      }
+    };
+
+    // 优先使用 h5sdk.ready 等待 SDK 初始化
+    if (h5sdk && typeof h5sdk.ready === 'function') {
+      h5sdk.ready(() => {
+        if (!settled) doRequest();
+      });
+      if (typeof h5sdk.error === 'function') {
+        h5sdk.error(err => {
+          if (settled) return;
+          settled = true;
+          console.error('[Feishu SDK] h5sdk.error:', err);
+          reject(new Error('SDK 初始化失败'));
+        });
+      }
+      // 兜底：如果 3 秒后 ready 还没触发，直接尝试调用
+      setTimeout(() => {
+        if (!settled) {
+          console.warn('[Feishu SDK] h5sdk.ready 超时，直接尝试 requestAuthCode');
+          doRequest();
+        }
+      }, 3000);
+    } else {
+      // 没有 h5sdk，直接尝试（tt 可能由客户端直接注入）
+      doRequest();
+    }
+  });
+
+  if (!code) throw new Error('未获取到飞书授权码');
+  await exchangeCodeForToken(code);
+}
+
 // 飞书免登录：支持飞书客户端内 + 外部浏览器两种场景
 async function feishuLogin(isRetry = false) {
   setLoginError('');
+  // 重置重试按钮
+  if (els.btnFeishuRetry) {
+    els.btnFeishuRetry.textContent = '重新登录';
+    els.btnFeishuRetry.style.display = 'none';
+    els.btnFeishuRetry.onclick = () => location.reload();
+  }
+
   try {
     // 1. 先检查是否已有有效会话（纯前端：检查localStorage）
     if (await checkSession()) {
@@ -124,74 +248,54 @@ async function feishuLogin(isRetry = false) {
         return;
       } catch (err) {
         console.error('URL code 换取失败:', err.message);
-        setLoginError('授权验证失败：' + err.message + '。请点击下方按钮重试。');
+        setLoginError('授权验证失败：' + err.message);
         setFeishuStatus('授权失败');
         return;
       }
     }
 
-    // 3. 判断是否在飞书客户端内（未配置appId时直接走本地模式）
-    const inFeishu = FEISHU_APP_ID && ((typeof window.h5sdk !== 'undefined') || (typeof window.tt !== 'undefined'));
+    // 未配置 App ID，进入本地免登录模式
+    if (!FEISHU_APP_ID) {
+      setFeishuStatus('本地模式');
+      authToken = 'local_demo';
+      currentUser = { name: '本地用户', user_id: 'local' };
+      localStorage.setItem(AUTH_STORAGE_KEY, authToken);
+      localStorage.setItem('table-app-current-user', JSON.stringify(currentUser));
+      showApp();
+      await startAppOnce();
+      return;
+    }
+
+    // 3. 判断是否在飞书客户端内
+    const inFeishu = isFeishuClient();
+    console.log('[Login] inFeishu=', inFeishu, 'has h5sdk=', typeof window.h5sdk !== 'undefined', 'has tt=', typeof window.tt !== 'undefined');
 
     if (inFeishu) {
-      // 飞书客户端内：通过 H5-JS-SDK requestAuthCode 获取授权码
-      setFeishuStatus('飞书客户端授权中...');
-      const code = await new Promise((resolve, reject) => {
-        const h5sdk = window.h5sdk;
-        const tt = window.tt;
-
-        const doRequest = () => {
-          if (tt && typeof tt.requestAuthCode === 'function') {
-            tt.requestAuthCode({
-              appId: FEISHU_APP_ID,
-              success(res) {
-                const c = res.code || res.authCode || '';
-                console.log('[Feishu SDK] requestAuthCode 成功, code=', c.slice(0, 8) + '...');
-                resolve(c);
-              },
-              fail(err) {
-                console.error('[Feishu SDK] requestAuthCode 失败:', err);
-                reject(new Error(err.errMsg || err.errmsg || JSON.stringify(err) || '获取授权码失败'));
-              }
-            });
-          } else {
-            reject(new Error('飞书 SDK 不支持 requestAuthCode，请更新飞书客户端'));
-          }
-        };
-
-        if (h5sdk && typeof h5sdk.ready === 'function') {
-          h5sdk.ready(doRequest);
-          if (typeof h5sdk.error === 'function') {
-            h5sdk.error(err => reject(new Error(`SDK初始化异常: ${JSON.stringify(err)}`)));
-          }
-        } else {
-          doRequest();
-        }
-      });
-
-      if (!code) throw new Error('未获取到飞书授权码');
-      await exchangeCodeForToken(code);
-    } else {
-      // 外部浏览器：跳转到飞书 OAuth 授权页
-      if (!FEISHU_APP_ID) {
-        // 未配置App ID，进入本地免登录模式
-        setFeishuStatus('本地模式');
-        authToken = 'local_demo';
-        currentUser = { name: '本地用户', user_id: 'local' };
-        localStorage.setItem(AUTH_STORAGE_KEY, authToken);
-        localStorage.setItem('table-app-current-user', JSON.stringify(currentUser));
-        showApp();
-        await startAppOnce();
+      // 飞书客户端内：先尝试免登，超时/失败后降级到手动 OAuth
+      try {
+        await withTimeout(feishuSSOLogin(), 8000, '免登超时，请点击手动登录');
+        return;
+      } catch (ssoErr) {
+        console.warn('[Login] 飞书免登失败，降级到手动登录:', ssoErr.message);
+        // 免登失败，显示手动登录按钮
+        showManualLoginButton(
+          '飞书自动登录失败（' + ssoErr.message + '）。' +
+          '请点击下方按钮手动登录。'
+        );
         return;
       }
-      setFeishuStatus('正在跳转至飞书授权...');
-      const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
-      const feishuAuthUrl = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=${FEISHU_APP_ID}&response_type=code&redirect_uri=${redirectUri}&state=feishu_login`;
-      window.location.href = feishuAuthUrl;
+    } else {
+      // 外部浏览器：直接跳转到飞书 OAuth 授权页
+      redirectToFeishuOAuth();
     }
   } catch (err) {
+    console.error('[Login] 登录异常:', err);
     setLoginError(err.message || '飞书登录失败');
     setFeishuStatus('登录失败，请重试');
+    // 异常情况下也显示手动登录按钮
+    if (FEISHU_APP_ID) {
+      showManualLoginButton(err.message || '登录失败');
+    }
   }
 }
 
