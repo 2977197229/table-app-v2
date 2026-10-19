@@ -156,7 +156,7 @@ function showManualLoginButton(message) {
 // 飞书客户端内免登
 async function feishuSSOLogin() {
   setFeishuStatus('飞书客户端授权中...');
-  
+
   const code = await new Promise((resolve, reject) => {
     const h5sdk = window.h5sdk;
     const tt = window.tt;
@@ -164,6 +164,35 @@ async function feishuSSOLogin() {
 
     const doRequest = () => {
       if (settled) return;
+      
+      // 优先通过 h5sdk 调用（标准方式）
+      if (h5sdk && typeof h5sdk.ready === 'function') {
+        // h5sdk 方式：ready 回调里调用 requestAuthCode
+        // 某些版本通过 h5sdk.browser 调用
+        const api = h5sdk.browser || h5sdk;
+        if (api && typeof api.requestAuthCode === 'function') {
+          api.requestAuthCode({
+            appId: FEISHU_APP_ID,
+            success(res) {
+              if (settled) return;
+              settled = true;
+              const c = res.code || res.authCode || '';
+              console.log('[Feishu SDK] h5sdk requestAuthCode 成功');
+              resolve(c);
+            },
+            fail(err) {
+              if (settled) return;
+              settled = true;
+              console.error('[Feishu SDK] h5sdk requestAuthCode 失败:', err);
+              const msg = err.errMsg || err.errmsg || (typeof err === 'string' ? err : JSON.stringify(err)) || '获取授权码失败';
+              reject(new Error(msg));
+            }
+          });
+          return;
+        }
+      }
+      
+      // 备选：tt.requestAuthCode（旧版或小程序方式）
       if (tt && typeof tt.requestAuthCode === 'function') {
         tt.requestAuthCode({
           appId: FEISHU_APP_ID,
@@ -171,13 +200,13 @@ async function feishuSSOLogin() {
             if (settled) return;
             settled = true;
             const c = res.code || res.authCode || '';
-            console.log('[Feishu SDK] requestAuthCode 成功');
+            console.log('[Feishu SDK] tt requestAuthCode 成功');
             resolve(c);
           },
           fail(err) {
             if (settled) return;
             settled = true;
-            console.error('[Feishu SDK] requestAuthCode 失败:', err);
+            console.error('[Feishu SDK] tt requestAuthCode 失败:', err);
             const msg = err.errMsg || err.errmsg || (typeof err === 'string' ? err : JSON.stringify(err)) || '获取授权码失败';
             reject(new Error(msg));
           }
@@ -189,7 +218,7 @@ async function feishuSSOLogin() {
       }
     };
 
-    // 优先使用 h5sdk.ready 等待 SDK 初始化
+    // 等待 SDK 就绪
     if (h5sdk && typeof h5sdk.ready === 'function') {
       h5sdk.ready(() => {
         if (!settled) doRequest();
@@ -202,15 +231,15 @@ async function feishuSSOLogin() {
           reject(new Error('SDK 初始化失败'));
         });
       }
-      // 兜底：如果 3 秒后 ready 还没触发，直接尝试调用
+      // 兜底：3 秒超时
       setTimeout(() => {
         if (!settled) {
-          console.warn('[Feishu SDK] h5sdk.ready 超时，直接尝试 requestAuthCode');
+          console.warn('[Feishu SDK] h5sdk.ready 超时，直接尝试');
           doRequest();
         }
       }, 3000);
     } else {
-      // 没有 h5sdk，直接尝试（tt 可能由客户端直接注入）
+      // 没有 h5sdk，直接尝试 tt
       doRequest();
     }
   });
